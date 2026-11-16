@@ -1,0 +1,32 @@
+INVENTARIO BISUTERÍA - App Android (PWA)
+=========================================
+
+Archivos (súbelos todos juntos, en la raíz del repositorio):
+  index.html      la app
+  manifest.json   nombre e ícono para instalarla en Android
+  sw.js           permite usarla sin internet
+  icon-192.png, icon-512.png   íconos
+
+PUBLICAR EN GITHUB PAGES (igual que REGISTRO-DIARIO-ILUMINACION)
+1. En GitHub crea un repositorio nuevo, por ejemplo: INVENTARIO-BISUTERIA (público).
+2. "Add file" > "Upload files" > arrastra los 5 archivos > "Commit changes".
+3. Settings > Pages > Source: "Deploy from a branch" > Branch: main / (root) > Save.
+4. En 1 o 2 minutos la app queda en:
+   https://kevinmendoza9703-crypto.github.io/INVENTARIO-BISUTERIA/
+
+INSTALAR EN CADA CELULAR
+1. Abre el enlace en Chrome (con internet la primera vez).
+2. Menú ⋮ > "Agregar a la pantalla principal" / "Instalar app".
+3. Desde ahí funciona aunque no haya internet.
+
+USO EN VARIOS CELULARES
+- Cada celular guarda sus datos y fotos en su propia memoria.
+- Al terminar, cada persona va a Excel > "Enviar mi respaldo" (por WhatsApp o Drive).
+- El celular principal usa Excel > "Combinar respaldo de otro celular".
+- Recomendado: que cada celular cuente zonas distintas, y que los productos NUEVOS
+  se registren en un solo celular, para que no se repitan SKU.
+- Desde el celular principal: Excel > "Carga masiva para el Punto de Venta".
+
+ACTUALIZAR LA APP
+- Reemplaza index.html en GitHub. Los datos guardados en los celulares no se borran.
+- No borres los datos de Chrome del celular sin antes guardar un respaldo.

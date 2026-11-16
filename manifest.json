@@ -1,0 +1,16 @@
+{
+  "name": "Inventario Bisutería",
+  "short_name": "Inventario",
+  "description": "Inventario de bisutería con fotos por SKU y carga masiva al punto de venta",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf6f3",
+  "theme_color": "#2b2326",
+  "lang": "es-PE",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
