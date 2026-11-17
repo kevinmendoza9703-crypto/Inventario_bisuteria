@@ -1,5 +1,5 @@
 // Funciona sin internet: guarda la app y el lector de Excel en el celular.
-const CACHE = "inv-bisuteria-v2";
+const CACHE = "inv-bisuteria-v3";
 const ASSETS = ["./", "./index.html", "./manifest.json", "./icon-192.png", "./icon-512.png",
   "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"];
 self.addEventListener("install", e => {

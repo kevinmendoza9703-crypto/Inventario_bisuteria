@@ -38,6 +38,15 @@ FUNCIONES NUEVAS (versión 2)
   Productos > "Etiquetas": imprime en A4 (3 o 4 por fila) o en rollo térmico 50x25 mm,
   una por producto o una por unidad contada. También descarga el QR/barras en PNG.
 
+ZONAS Y CATEGORÍAS (versión 3)
+- Pestaña "Zonas y categ.": agrega zonas y categorías propias (ej. Pinzas, Vinchas).
+- Cada categoría se cuenta "por unidad" o "por par" (Aretes viene por par).
+  Toca la etiqueta "por unidad / por par" para cambiarla.
+- También puedes crear una categoría desde el formulario: Categoría > "+ Nueva categoría…".
+- En un producto puedes cambiar "Se cuenta por" (Unidad / Par) solo para ese producto.
+- Los productos por par: la cantidad es en pares, el precio es por par, el conteo en
+  foto divide las piezas entre 2, y en la carga masiva salen con unidad de medida PAR.
+
 ACTUALIZAR LA APP
 - Reemplaza index.html en GitHub. Los datos guardados en los celulares no se borran.
 - No borres los datos de Chrome del celular sin antes guardar un respaldo.
