@@ -27,6 +27,17 @@ USO EN VARIOS CELULARES
   se registren en un solo celular, para que no se repitan SKU.
 - Desde el celular principal: Excel > "Carga masiva para el Punto de Venta".
 
+FUNCIONES NUEVAS (versión 2)
+- Reconoce el tipo de pieza (collar, pulsera, anillo, aretes…): aprende de las
+  fotos que van guardando. Desde 8 fotos (de al menos 2 categorías) sugiere la
+  categoría al tomar la foto. La primera vez necesita internet (descarga ~5 MB).
+  En Productos > "Aprender de las fotos" aprende de las fotos ya registradas.
+- Cuenta piezas en una foto (botón 🔢): piezas separadas, sobre tela o papel liso
+  de un color que contraste, foto desde arriba. Revisa los números y corrige si hace falta.
+- Código de barras (Code 128) y QR por producto, con el SKU o el código de barras.
+  Productos > "Etiquetas": imprime en A4 (3 o 4 por fila) o en rollo térmico 50x25 mm,
+  una por producto o una por unidad contada. También descarga el QR/barras en PNG.
+
 ACTUALIZAR LA APP
 - Reemplaza index.html en GitHub. Los datos guardados en los celulares no se borran.
 - No borres los datos de Chrome del celular sin antes guardar un respaldo.
