@@ -108,6 +108,7 @@ h3{font-size:15px;margin:4px 0 8px}
 <div id="countRoot"></div>
 <input type="file" id="camInput" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="scanInput" accept="image/*" capture="environment" class="hidden">
+<input type="file" id="invInput" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="countInput" accept="image/*" capture="environment" class="hidden">
 <input type="file" id="backupInput" accept=".json,application/json" class="hidden">
 <input type="file" id="importInput" accept=".xlsx,.xls,.csv" class="hidden">
@@ -1419,18 +1420,29 @@ function writeProduct(id,data){S.products.set(id,data);updSync();return idbPut("
 function delProduct(id){S.products.delete(id);updSync();return idbDel("productos",id).catch(saveErr);}
 function writeZone(id,data){S.zones.set(id,data);return idbPut("zonas",id,data).catch(saveErr);}
 function delZone(id){S.zones.delete(id);return idbDel("zonas",id).catch(saveErr);}
-function bumpStock(id,newStock){
+/* Cantidades por zona: p.porZona = {zona: cantidad}; p.stock = total */
+function hasZones(){return S.zones.size>0;}
+function WZ(){return S.zoneFilter||"";}
+function canEditQty(){return !hasZones()||!!S.zoneFilter;}
+function zq(p,z){return num((p&&p.porZona||{})[z]);}
+function inZone(p,z){return !!(p&&p.porZona&&Object.prototype.hasOwnProperty.call(p.porZona,z));}
+function recompute(p){const pz=p.porZona||{};let t=0;for(const k in pz)t+=Math.max(0,num(pz[k]));p.stock=t;
+  p.zona=Object.keys(pz).filter(k=>num(pz[k])>0).map(k=>k||"Sin zona").join(", ");return p;}
+function normP(p){if(!p||typeof p!=="object")return p;if(!p.porZona||typeof p.porZona!=="object"){p.porZona={};const z=p.zona||"";if(num(p.stock)||z)p.porZona[z]=Math.max(0,Math.round(num(p.stock)));}if(!p.zt)p.zt={};return recompute(p);}
+function zoneText(p){const pz=p.porZona||{};const ks=Object.keys(pz).filter(k=>num(pz[k])>0);if(!ks.length)return hasZones()?"Sin contar":"";return ks.map(k=>(k||"Sin zona")+": "+intf(num(pz[k]))).join(" · ");}
+function withZQ(p,z,q){const d=Object.assign({},p,{porZona:Object.assign({},p.porZona||{}),zt:Object.assign({},p.zt||{})});d.porZona[z]=Math.max(0,Math.round(num(q)));d.zt[z]=new Date().toISOString();d.contado=true;d.actualizado=d.zt[z];return recompute(d);}
+function setZQ(id,z,q){
   const p=S.products.get(id);if(!p)return;
-  const d=Object.assign({},p,{stock:Math.max(0,Math.round(newStock)),contado:true,actualizado:new Date().toISOString()});
-  S.products.set(id,d);
+  S.products.set(id,withZQ(p,z,q));
   clearTimeout(pending.get(id));
   pending.set(id,setTimeout(()=>{pending.delete(id);writeProduct(id,S.products.get(id)).catch(()=>{});},400));
 }
+function bumpStock(id,n){setZQ(id,WZ(),n);}
 function setSync(t){$("#sync").textContent=t;}
 function updSync(){setSync("● Guardado en este celular · "+S.products.size+" productos · "+(navigator.onLine?"en línea":"sin internet"));}
 async function initStore(){
   try{
-    idb=await idbOpen();S.products=await idbAll("productos");S.zones=await idbAll("zonas");try{AI.emb=await idbAll("emb");}catch(e){}
+    idb=await idbOpen();S.products=await idbAll("productos");S.products.forEach(p=>normP(p));S.zones=await idbAll("zonas");try{AI.emb=await idbAll("emb");}catch(e){}
     try{const cm=await idbAll("cats");if(cm.size){CATS=Array.from(cm.values());sortCats();}else{sortCats();for(const c of CATS)await idbPut("cats",norm(c.n),c);}}catch(e){}S.mode="local";
     if(navigator.storage&&navigator.storage.persist)navigator.storage.persist().catch(()=>{});
     updSync();
@@ -1489,17 +1501,99 @@ async function aiLearn(id,p){
   if(!p||!p.foto||!p.cat)return;
   try{const v=await aiEmbed(p.foto);const e={cat:p.cat,v,n:p.foto.length};AI.emb.set(id,e);await idbPut("emb",id,e);}catch(e){}
 }
-function aiForget(id){AI.emb.delete(id);idbDel("emb",id).catch(()=>{});}
-function aiStats(){const c={};AI.emb.forEach((e,id)=>{const p=S.products.get(id);if(!p)return;c[p.cat]=(c[p.cat]||0)+1;});return c;}
-async function aiGuess(foto,excludeId){
-  const ex=[];AI.emb.forEach((e,id)=>{const p=S.products.get(id);if(p&&id!==excludeId)ex.push({cat:p.cat,v:e.v});});
-  const cats=new Set(ex.map(x=>x.cat));
-  if(ex.length<8||cats.size<2)return {need:true,have:ex.length};
-  const v=await aiEmbed(foto);
-  const sc=ex.map(x=>{let d=0;for(let i=0;i<v.length;i++)d+=v[i]*x.v[i];return {cat:x.cat,s:d};}).sort((a,b)=>b.s-a.s).slice(0,7);
-  const w={};let tot=0;sc.forEach(x=>{const k=Math.max(0,x.s)**4;w[x.cat]=(w[x.cat]||0)+k;tot+=k;});
+function aiForget(id){Array.from(AI.emb.keys()).filter(k=>k===id||k.startsWith(id+"#")).forEach(k=>{AI.emb.delete(k);idbDel("emb",k).catch(()=>{});});}
+function aiStats(){const c={};AI.emb.forEach((e,id)=>{if(e.pid)return;const p=S.products.get(id);if(!p)return;c[p.cat]=(c[p.cat]||0)+1;});return c;}
+function embList(excludeId){const ex=[];AI.emb.forEach((e,k)=>{const pid=e.pid||k;const p=S.products.get(pid);if(p&&pid!==excludeId)ex.push({pid,p,v:e.v});});return ex;}
+function dot(a,b){let d=0;for(let i=0;i<a.length;i++)d+=a[i]*b[i];return d;}
+function guessField(v,field,excludeId,minN){
+  const ex=embList(excludeId).filter(x=>String(x.p[field]||"").trim());
+  const vals=new Set(ex.map(x=>norm(x.p[field])));
+  if(ex.length<(minN||8)||vals.size<2)return null;
+  const sc=ex.map(x=>({k:norm(x.p[field]),lbl:String(x.p[field]).trim(),s:dot(v,x.v)})).sort((a,b)=>b.s-a.s).slice(0,7);
+  const w={},lb={};let tot=0;sc.forEach(x=>{const k=Math.max(0,x.s)**4;w[x.k]=(w[x.k]||0)+k;lb[x.k]=lb[x.k]||x.lbl;tot+=k;});
   const best=Object.entries(w).sort((a,b)=>b[1]-a[1])[0];
-  return {cat:best[0],conf:tot?best[1]/tot:0};
+  return {val:lb[best[0]],conf:tot?best[1]/tot:0};
+}
+async function aiGuess(foto,excludeId){
+  const ex=embList(excludeId);if(ex.length<8||new Set(ex.map(x=>x.p.cat)).size<2)return {need:true,have:ex.length};
+  const v=await aiEmbed(foto);const r=guessField(v,"cat",excludeId,8);return r?{cat:r.val,conf:r.conf}:{need:true,have:ex.length};
+}
+function matchProducts(v,k){
+  const best=new Map();embList().forEach(x=>{const sc=dot(v,x.v);if(!best.has(x.pid)||best.get(x.pid)<sc)best.set(x.pid,sc);});
+  return Array.from(best.entries()).sort((a,b)=>b[1]-a[1]).slice(0,k||3).map(([pid,sc])=>({pid,p:S.products.get(pid),s:sc}));
+}
+async function aiAddExample(pid,v){ // otra foto del mismo producto: mejora la búsqueda
+  const p=S.products.get(pid);if(!p)return;
+  const extras=Array.from(AI.emb.keys()).filter(k=>k.startsWith(pid+"#")).sort();
+  while(extras.length>=4){const k=extras.shift();AI.emb.delete(k);idbDel("emb",k).catch(()=>{});}
+  const k=pid+"#"+Date.now();const e={pid,cat:p.cat,v,n:0};AI.emb.set(k,e);idbPut("emb",k,e).catch(()=>{});
+}
+/* Tono del metal por color: dorado / plateado / rosado */
+function metalTone(img){
+  const W=160,H=Math.max(1,Math.round(img.height*160/img.width));const c=document.createElement("canvas");c.width=W;c.height=H;const g=c.getContext("2d");g.drawImage(img,0,0,W,H);
+  const d=g.getImageData(0,0,W,H).data;const br=[],bg=[],bb=[];const band=6;
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(x<band||y<band||x>=W-band||y>=H-band){const i=(y*W+x)*4;br.push(d[i]);bg.push(d[i+1]);bb.push(d[i+2]);}
+  const med=a=>{a.sort((x,y)=>x-y);return a[a.length>>1];};const R=med(br),G=med(bg),B=med(bb);
+  let n=0,gold=0,rose=0,grey=0;
+  for(let i=0;i<d.length;i+=4){const r=d[i],gg=d[i+1],b=d[i+2];if(Math.hypot(r-R,gg-G,b-B)<45)continue;
+    const mx=Math.max(r,gg,b),mn=Math.min(r,gg,b);if(mx<40)continue;n++;const sat=(mx-mn)/mx;
+    let h=0;if(mx!==mn){if(mx===r)h=60*(((gg-b)/(mx-mn))%6);else if(mx===gg)h=60*((b-r)/(mx-mn)+2);else h=60*((r-gg)/(mx-mn)+4);}if(h<0)h+=360;
+    if(sat<0.16)grey++;else if(h>=28&&h<=62)gold++;else if(h<28||h>=340)rose++;}
+  if(n<30)return null;
+  const fg=gold/n,fr=rose/n,fs=grey/n;
+  if(fg>0.35&&fg>=fr)return {tono:"Dorado",conf:fg};
+  if(fr>0.35)return {tono:"Rosado",conf:fr};
+  if(fs>0.5)return {tono:"Plateado",conf:fs};
+  return null;
+}
+/* ---------- Inventariar con foto ---------- */
+function photoInventory(){
+  if(!canEditQty())return toast("Primero elige la zona en la que estás contando");
+  const i=$("#invInput");i.value="";i.click();
+}
+async function runPhotoInventory(file){
+  let foto,img;try{foto=await resizeImage(file,520,0.72);img=await imgFromData(foto);}catch(e){return toast("No se pudo leer la foto");}
+  const Z=WZ();
+  const box=$("#countRoot");
+  box.innerHTML='<div class="modal" style="z-index:25"><div class="sheet"><div class="row" style="justify-content:space-between"><h2>Inventariar con foto</h2><button class="btn sm" id="piX">Cerrar</button></div>'+
+    '<div class="mut">📍 Zona: <b>'+esc(Z||"Sin zona")+'</b></div><div class="row" style="gap:10px;margin-top:8px"><img src="'+foto+'" alt="" style="width:110px;height:110px;object-fit:cover;border-radius:10px;flex:none"><div class="grow" id="piStatus">Buscando el producto entre los registrados…</div></div><div id="piBody"></div></div></div>';
+  $("#piX").onclick=()=>{box.innerHTML="";};
+  const tone=metalTone(img);
+  let v=null,err="";
+  try{v=await aiEmbed(foto);}catch(e){err="El reconocimiento necesita internet la primera vez para descargarse.";}
+  if(!$("#piBody"))return;
+  const sugCat=v?guessField(v,"cat",null,8):null, sugMat=v?guessField(v,"material",null,6):null;
+  const newPreset=()=>{const pr={foto,stock:1};const notes=[];
+    if(sugCat&&sugCat.conf>=0.5){pr.cat=sugCat.val;notes.push("Categoría <b>"+esc(sugCat.val)+"</b> ("+Math.round(sugCat.conf*100)+"%)");}
+    if(tone){pr.color=tone.tono;notes.push("Tono <b>"+tone.tono+"</b>");}
+    if(sugMat&&sugMat.conf>=0.5){pr.material=sugMat.val;notes.push("Material <b>"+esc(sugMat.val)+"</b> ("+Math.round(sugMat.conf*100)+"%)");}
+    if(notes.length)pr._nota="🧠 Sugerido por la foto: "+notes.join(" · ")+".<br><span class='mut'>Revísalo. Plata y acero se ven casi iguales: confirma el material con el sello <b>925</b> (plata) o la etiqueta del proveedor.</span>";
+    return pr;};
+  const cands=v?matchProducts(v,3):[];
+  const qtyRow=(p)=>'<div class="row" style="margin-top:10px"><div class="grow"><label style="margin-top:0">Cantidad a sumar'+(p&&isPar(p)?" (pares)":"")+'</label><input id="piQty" inputmode="numeric" value="1" style="font-size:20px;font-weight:700"></div><button class="btn" id="piCnt" style="align-self:flex-end">🔢 Contar en la foto</button></div>';
+  let h="";
+  if(!cands.length){
+    $("#piStatus").innerHTML=err?esc(err):(embList().length?"No se encontró un producto parecido.":"Aún no hay productos con foto para comparar. Registra este como el primero.");
+    h+='<button class="btn pri full" id="piNew" style="margin-top:12px">＋ Crear producto nuevo con esta foto</button>';
+  }else{
+    const top=cands[0],gap=top.s-(cands[1]?cands[1].s:0);const sure=top.s>=0.9&&gap>=0.03;
+    $("#piStatus").innerHTML=sure?"✅ <b>Encontrado.</b> Confirma que es el mismo producto.":"¿Es alguno de estos? Elige el correcto o crea uno nuevo.";
+    h+='<div style="margin-top:10px">'+cands.map((c,i)=>'<label class="item" style="cursor:pointer;margin:0 0 8px;color:var(--ink)"><input type="radio" name="piSel" value="'+c.pid+'" '+(i===0&&sure?"checked":"")+' style="width:auto"><img src="'+(c.p.foto||"")+'" alt="" style="width:58px;height:58px;object-fit:cover;border-radius:9px;flex:none;background:var(--acc2)"><div class="grow"><div class="name">'+esc(pname(c.p))+'</div><div class="sku">'+esc(c.p.sku)+'</div><div class="mut">Parecido '+Math.round(Math.max(0,c.s)*100)+'% · En esta zona: '+uLabel(c.p,zq(c.p,Z))+'</div></div></label>').join("")+'</div>';
+    h+=qtyRow(top.p)+'<button class="btn pri full" id="piAdd" style="margin-top:10px;padding:14px">Sumar al inventario</button><button class="btn full" id="piNew" style="margin-top:8px">No es ninguno: crear producto nuevo</button>';
+  }
+  $("#piBody").innerHTML=h;
+  const qtyVal=()=>Math.max(1,Math.round(num(($("#piQty")||{}).value||1)));
+  if($("#piCnt"))$("#piCnt").onclick=()=>{const sel=document.querySelector('input[name="piSel"]:checked');const p=sel?S.products.get(sel.value):null;openCount(file,"Esta foto",n=>{if($("#piQty"))$("#piQty").value=Math.max(1,n);},p?isPar(p):false);};
+  if($("#piAdd"))$("#piAdd").onclick=()=>{
+    const sel=document.querySelector('input[name="piSel"]:checked');if(!sel)return toast("Toca el producto correcto o crea uno nuevo");
+    const pid=sel.value,p=S.products.get(pid);if(!p)return;const q=qtyVal();
+    S.products.set(pid,withZQ(p,Z,zq(p,Z)+q));writeProduct(pid,S.products.get(pid)).catch(()=>{});
+    if(v)aiAddExample(pid,v);
+    box.innerHTML='<div class="modal" style="z-index:25"><div class="sheet"><h2>✅ Sumado</h2><p><b>'+esc(pname(p))+'</b><br>+'+q+' → '+uLabel(p,zq(S.products.get(pid),Z))+' en '+esc(Z||"sin zona")+'</p><div style="display:grid;gap:8px"><button class="btn pri full" id="piNext" style="padding:14px">📷 Siguiente foto</button><button class="btn full" id="piEnd">Terminar</button></div></div></div>';
+    $("#piNext").onclick=()=>{box.innerHTML="";photoInventory();};$("#piEnd").onclick=()=>{box.innerHTML="";};
+    render();
+  };
+  $("#piNew").onclick=()=>{const pr=newPreset();if($("#piQty"))pr.stock=qtyVal();box.innerHTML="";openForm(null,pr);};
 }
 async function aiTrainAll(btn){
   const todo=list().map(p=>[idOf(p),p]).filter(([id,p])=>p.foto&&(!AI.emb.has(id)||AI.emb.get(id).n!==p.foto.length));
@@ -1565,6 +1659,7 @@ async function openCount(file,title,cb,par){
   $("#cntNo").onclick=closeCount;
   $("#cntOk").onclick=()=>{const v=Math.max(0,Math.round(num($("#cntN").value)));closeCount();cb(v);};
 }
+$("#invInput").addEventListener("change",e=>{const f=e.target.files&&e.target.files[0];if(f)runPhotoInventory(f);});
 $("#countInput").addEventListener("change",e=>{const f=e.target.files&&e.target.files[0];if(!f||!countCb)return;const c=countCb;countCb=null;openCount(f,c.title,c.cb,c.par);});
 
 /* ---------- Códigos: barras (Code 128) y QR ---------- */
@@ -1622,7 +1717,7 @@ function zoneOptions(sel){let h='<option value="">— Sin zona —</option>';Arr
 function openForm(id,preset){
   if(!S.canWrite){toast("Solo lectura: no puedes editar.");return;}
   const ex=id?S.products.get(id):null;
-  const p=Object.assign({cat:"Collar",modelo:"",material:"",color:"",talla:"",barcode:"",costo:"",precio:"",stock:"",zona:S.zoneFilter||"",foto:"",notas:""},preset||{},ex||{});
+  const p=Object.assign({cat:"Collar",modelo:"",material:"",color:"",talla:"",barcode:"",costo:"",precio:"",stock:"",foto:"",notas:""},preset||{},ex||{});
   let foto=p.foto||"";let skuTouched=!!ex;
   const catOpts=CATS.map(c=>'<option'+(c.n===p.cat?" selected":"")+'>'+esc(c.n)+'</option>').join("")+(CATS.some(c=>c.n===p.cat)?"":'<option selected>'+esc(p.cat)+'</option>');
   let uniTouched=!!(ex&&ex.unidad);
@@ -1639,12 +1734,12 @@ function openForm(id,preset){
     <div><label>Material</label><input id="f_material" value="${esc(p.material)}" placeholder="Ej. Plata, acero" list="dlMat"></div>
     <div><label>Color</label><input id="f_color" value="${esc(p.color)}" placeholder="Ej. Dorado" list="dlCol"></div>
     <div><label>Talla / medida</label><input id="f_talla" value="${esc(p.talla)}" placeholder="Ej. 7, 45 cm"></div>
-    <div><label>Zona / exhibidor</label><select id="f_zona">${zoneOptions(p.zona)}</select></div>
     <div><label>Costo (S/)</label><input id="f_costo" inputmode="decimal" value="${esc(p.costo)}"></div>
     <div><label>Precio venta (S/)</label><input id="f_precio" inputmode="decimal" value="${esc(p.precio)}"></div>
-    <div><label id="f_stockL">Cantidad contada</label><div class="row"><input id="f_stock" inputmode="numeric" value="${esc(p.stock)}"><button class="btn sm" id="fCnt" title="Contar en foto">🔢</button></div></div>
+    <div><label id="f_stockL">Cantidad contada</label><div class="row"><input id="f_stock" inputmode="numeric" value="${esc(ex?zq(ex,WZ()):p.stock)}"><button class="btn sm" id="fCnt" title="Contar en foto">🔢</button></div></div>
     <div><label>Código de barras</label><div class="row"><input id="f_barcode" value="${esc(p.barcode)}" placeholder="Opcional"><button class="btn sm" id="fScan" title="Escanear">▦</button></div></div>
    </div>
+   <div class="mut" style="margin-top:6px">📍 Se cuenta en: <b>${esc(WZ()||"Sin zona")}</b>${ex&&zoneText(ex)?" · Total: "+esc(zoneText(ex)):""}</div>
    <label>SKU (se genera solo)</label><input id="f_sku" style="font-family:ui-monospace,Menlo,monospace">
    <label>Notas</label><input id="f_notas" value="${esc(p.notas)}" placeholder="Opcional">
    <div class="codes" id="fCodes"></div>
@@ -1657,9 +1752,9 @@ function openForm(id,preset){
     ${ex?'<button class="btn bad full" id="fDel">Eliminar producto</button>':""}
    </div></div></div>`;
   const skuIn=$("#f_sku");
-  const cur=()=>({cat:$("#f_cat").value,modelo:$("#f_modelo").value.trim(),material:$("#f_material").value.trim(),color:$("#f_color").value.trim(),talla:$("#f_talla").value.trim(),zona:$("#f_zona").value,costo:num($("#f_costo").value),precio:num($("#f_precio").value),stock:Math.max(0,Math.round(num($("#f_stock").value))),barcode:$("#f_barcode").value.trim(),notas:$("#f_notas").value.trim(),unidad:$("#f_uni").value});
+  const cur=()=>({cat:$("#f_cat").value,modelo:$("#f_modelo").value.trim(),material:$("#f_material").value.trim(),color:$("#f_color").value.trim(),talla:$("#f_talla").value.trim(),costo:num($("#f_costo").value),precio:num($("#f_precio").value),stock:Math.max(0,Math.round(num($("#f_stock").value))),barcode:$("#f_barcode").value.trim(),notas:$("#f_notas").value.trim(),unidad:$("#f_uni").value});
   const regen=()=>{if(!skuTouched)skuIn.value=genSku(cur());};
-  const uniUI=()=>{const par=$("#f_uni").value==="PAR";$("#f_stockL").textContent=par?"Cantidad contada (pares)":"Cantidad contada";};
+  const uniUI=()=>{const par=$("#f_uni").value==="PAR";$("#f_stockL").textContent="Cantidad"+(hasZones()?" en "+(WZ()||"sin zona"):"")+(par?" (pares)":"");};
   $("#f_uni").value=p.unidad||((catOf(p.cat)||{}).par?"PAR":"UND");uniUI();
   $("#f_uni").addEventListener("change",()=>{uniTouched=true;uniUI();});
   let lastCat=$("#f_cat").value;
@@ -1677,6 +1772,7 @@ function openForm(id,preset){
   $("#f_cat").addEventListener("change",regen);
   const drawPhoto=()=>{$("#fPhoto").innerHTML=foto?'<img alt="Foto" src="'+foto+'">':'<span style="font-size:28px">📷</span><span>Toca para tomar la foto</span>';$("#fDelFoto").classList.toggle("hidden",!foto);};
   drawPhoto();
+  if(preset&&preset._nota)$("#fSug").innerHTML=preset._nota;
   const sug=async()=>{const el=$("#fSug");if(!el||!foto)return;
     const have=AI.emb.size;if(have<8){el.textContent="🧠 La app aprende a reconocer el tipo de pieza con las fotos que guardes (lleva "+have+" de 8 mínimo).";return;}
     el.textContent="🧠 Reconociendo el tipo de pieza…";
@@ -1696,7 +1792,8 @@ function openForm(id,preset){
   $("#fQrPng").onclick=async()=>{const t=codeText(curP());if(!t)return;saveFile("QR_"+t.replace(/[^A-Za-z0-9._-]/g,"_")+".png",await svgToPng(qrSVG(t),600,600));};
   $("#fBcPng").onclick=async()=>{const t=codeText(curP());if(!t)return;saveFile("Barras_"+t.replace(/[^A-Za-z0-9._-]/g,"_")+".png",await svgToPng(barcodeSVG(t,80),900,240));};
   $("#fCnt").onclick=()=>countPhoto(pname(cur())||"Producto",v=>{$("#f_stock").value=v;},$("#f_uni").value==="PAR");
-  const shoot=()=>takePhoto(d=>{foto=d;drawPhoto();$("#fCam").textContent="📷 Cambiar foto";sug();});
+  const tonSug=async()=>{try{const t=metalTone(await imgFromData(foto));if(t&&!$("#f_color").value.trim()){$("#f_color").value=t.tono;regen();codes();toast("Tono detectado: "+t.tono);}}catch(e){}};
+  const shoot=()=>takePhoto(d=>{foto=d;drawPhoto();$("#fCam").textContent="📷 Cambiar foto";sug();tonSug();});
   $("#fPhoto").onclick=shoot;$("#fCam").onclick=shoot;
   $("#fDelFoto").onclick=()=>{foto="";drawPhoto();};
   $("#fScan").onclick=()=>scan(v=>{$("#f_barcode").value=v;});
@@ -1707,12 +1804,14 @@ function openForm(id,preset){
     if(dupe){ if(skuTouched){toast("Ese SKU ya existe: "+sku);return;} sku=genSku(c); }
     if(c.barcode){const db2=list().find(x=>x.barcode===c.barcode&&x!==ex);if(db2){const ok=await confirmBox("El código de barras "+c.barcode+" ya está en "+db2.sku+". ¿Guardar de todos modos?","Guardar");if(!ok)return;}}
     const now=new Date().toISOString();
-    const data=Object.assign({},ex||{},c,{sku,foto,contado:true,actualizado:now,creado:(ex&&ex.creado)||now});
+    const qty=c.stock;delete c.stock;
+    let data=Object.assign({},ex||{porZona:{},zt:{}},c,{sku,foto,contado:true,actualizado:now,creado:(ex&&ex.creado)||now});
+    data=(!ex||qty!==zq(ex,WZ()))?withZQ(data,WZ(),qty):recompute(data);data.actualizado=now;
     const pid=id||uid();
     closeModal();renderSoft();
     writeProduct(pid,data).then(()=>{toast("Guardado "+sku);if(data.foto&&(AI.model||navigator.onLine))aiLearn(pid,data);}).catch(()=>{});
     renderSoft();
-    if(variant){openForm(null,{cat:c.cat,modelo:c.modelo,material:c.material,costo:c.costo,precio:c.precio,zona:c.zona,unidad:c.unidad});toast("Ahora la variante: cambia color o talla y toma su foto",3500);}
+    if(variant){openForm(null,{cat:c.cat,modelo:c.modelo,material:c.material,costo:c.costo,precio:c.precio,unidad:c.unidad});toast("Ahora la variante: cambia color o talla y toma su foto",3500);}
   };
   $("#fSave").onclick=()=>save(false);$("#fVar").onclick=()=>save(true);
   if(ex)$("#fDel").onclick=async()=>{if(await confirmBox("¿Eliminar "+ex.sku+"? No se puede deshacer.","Eliminar")){delProduct(id).catch(()=>{});aiForget(id);closeModal();renderSoft();toast("Eliminado");}};
@@ -1722,13 +1821,13 @@ function uniq(k){const s=new Set();S.products.forEach(p=>{if(p[k])s.add(p[k]);})
 /* ---------- Views ---------- */
 function filtered(){
   const q=norm(S.q);
-  return list().filter(p=>(!S.zoneFilter||p.zona===S.zoneFilter)&&(!S.catFilter||p.cat===S.catFilter)&&(!q||norm(pname(p)+" "+p.sku+" "+(p.barcode||"")).includes(q))).sort((a,b)=>String(a.sku).localeCompare(String(b.sku)));
+  return list().filter(p=>(!S.zoneFilter||S.q||inZone(p,S.zoneFilter))&&(!S.catFilter||p.cat===S.catFilter)&&(!q||norm(pname(p)+" "+p.sku+" "+(p.barcode||"")).includes(q))).sort((a,b)=>String(a.sku).localeCompare(String(b.sku)));
 }
 function itemHTML(p,id,countMode){
   const th=p.foto?'<button class="thumb" data-photo="'+id+'"><img alt="" src="'+p.foto+'" style="width:58px;height:58px;border-radius:9px;object-fit:cover"></button>':'<button class="thumb nofoto" data-photo="'+id+'">📷<br>Foto</button>';
-  const right=countMode?'<div class="qty"><button data-m="'+id+'" aria-label="menos">−</button><input data-q="'+id+'" inputmode="numeric" value="'+(p.stock||0)+'"><button data-p="'+id+'" aria-label="más">+</button></div>'
+  const right=countMode?(canEditQty()?'<div class="qty"><button data-m="'+id+'" aria-label="menos">−</button><input data-q="'+id+'" inputmode="numeric" value="'+zq(p,WZ())+'"><button data-p="'+id+'" aria-label="más">+</button></div>':'<div style="text-align:right;flex:none"><b>'+uLabel(p,p.stock||0)+'</b><div class="mut">total</div></div>')
     :'<div style="text-align:right;flex:none"><b>'+uLabel(p,p.stock||0)+'</b><div class="mut">'+money(num(p.precio))+'</div></div>';
-  return '<div class="item">'+th+'<div class="grow" data-edit="'+id+'"><div class="name">'+esc(pname(p)||"(sin nombre)")+'</div><div class="sku">'+esc(p.sku)+(p.barcode?" · "+esc(p.barcode):"")+'</div><div class="mut">'+esc(p.zona||"Sin zona")+(isPar(p)?' · <b>se cuenta por par</b>':'')+'</div>'+(countMode?'<button class="btn sm" data-cnt="'+id+'" style="margin-top:4px">🔢 Contar en foto</button>':'')+'</div>'+right+'</div>';
+  return '<div class="item">'+th+'<div class="grow" data-edit="'+id+'"><div class="name">'+esc(pname(p)||"(sin nombre)")+'</div><div class="sku">'+esc(p.sku)+(p.barcode?" · "+esc(p.barcode):"")+'</div><div class="mut">'+esc(zoneText(p))+(isPar(p)?' · <b>se cuenta por par</b>':'')+'</div>'+(countMode&&canEditQty()?'<button class="btn sm" data-cnt="'+id+'" style="margin-top:4px">🔢 Contar en foto</button>':'')+'</div>'+right+'</div>';
 }
 function idOf(p){for(const [k,v] of S.products)if(v===p)return k;return null;}
 function searchBar(){
@@ -1738,14 +1837,22 @@ function searchBar(){
 }
 function viewContar(){
   const items=filtered();
-  const z=S.zoneFilter?Array.from(S.zones.values()).find(x=>x.nombre===S.zoneFilter):null;
-  const zId=z?Array.from(S.zones.entries()).find(e=>e[1]===z)[0]:null;
-  let h=searchBar();
-  if(z){h+='<div class="card row"><div class="grow"><b>'+esc(z.nombre)+'</b> <span class="pill '+pillCls(z.estado)+'">'+esc(z.estado||"pendiente")+'</span><div class="mut">'+(z.responsable?("Responsable: "+esc(z.responsable)+" · "):"")+items.length+' modelos · '+intf(items.reduce((a,p)=>a+num(p.stock),0))+' unidades</div></div>'+
-    (z.estado==="contada"?'<button class="btn sm" data-zre="'+zId+'">Reabrir</button>':'<button class="btn sm pri" data-zok="'+zId+'">Marcar contada</button>')+'</div>';}
-  if(!S.products.size)return h+'<div class="empty">Todavía no hay productos.<br>Toca <b>+ Producto</b> para registrar el primero con su foto.</div>';
-  if(!items.length)return h+'<div class="empty">Sin resultados.'+(S.q?'<br><button class="btn sm" id="newFromQ" style="margin-top:8px">+ Crear producto nuevo</button>':"")+'</div>';
-  return h+'<div id="lst">'+items.map(p=>itemHTML(p,idOf(p),true)).join("")+'</div>';
+  const zs=Array.from(S.zones.entries()).sort((a,b)=>a[1].nombre.localeCompare(b[1].nombre));
+  const ze=S.zoneFilter?zs.find(e=>e[1].nombre===S.zoneFilter):null;
+  let h='';
+  if(zs.length){
+    h+='<div class="card" style="border-color:'+(ze?'var(--line)':'var(--acc)')+'"><label style="margin-top:0">📍 Zona en la que estás contando</label><select id="zSel" style="font-weight:600"><option value="">'+(ze?'— Ver todas las zonas —':'— Elige la zona —')+'</option>'+zs.map(([id,z])=>'<option'+(z.nombre===S.zoneFilter?" selected":"")+'>'+esc(z.nombre)+'</option>').join("")+'</select>';
+    if(ze){const z=ze[1];const u=list().reduce((a,p)=>a+zq(p,z.nombre),0);const nm=list().filter(p=>zq(p,z.nombre)>0).length;
+      h+='<div class="row" style="margin-top:8px"><div class="grow mut">'+(z.responsable?esc(z.responsable)+" · ":"")+nm+' modelos · '+intf(u)+' unid. <span class="pill '+pillCls(z.estado)+'">'+esc(z.estado||"pendiente")+'</span></div>'+
+        (z.estado==="contada"?'<button class="btn sm" data-zre="'+ze[0]+'">Reabrir</button>':'<button class="btn sm" data-zok="'+ze[0]+'">Marcar contada</button>')+'</div>';}
+    else h+='<div class="mut" style="margin-top:6px">Elige la zona una vez: todo lo que cuentes o fotografíes se suma a esa zona.</div>';
+    h+='</div>';
+  }
+  if(canEditQty())h+='<button class="btn pri full" id="photoInv" style="padding:16px;font-size:16px;margin-bottom:10px">📷 Inventariar con foto</button>';
+  h+='<div class="row" style="margin-bottom:10px"><input id="qIn" class="grow" placeholder="Buscar por nombre, SKU o código" value="'+esc(S.q)+'"><button class="btn" id="scanBtn" title="Escanear código">▦</button></div>';
+  if(!S.products.size)return h+'<div class="empty">Todavía no hay productos.<br>Toca <b>📷 Inventariar con foto</b> o <b>+ Producto</b>.</div>';
+  if(!items.length)return h+'<div class="empty">'+(S.q?'Sin resultados.<br><button class="btn sm" id="newFromQ" style="margin-top:8px">+ Crear producto nuevo</button>':(ze?'Aún no hay productos contados en esta zona.<br>Usa <b>📷 Inventariar con foto</b> o busca un producto.':'Sin resultados.'))+'</div>';
+  return h+(ze&&!S.q?'<div class="mut" style="margin:0 0 6px">Contados en '+esc(ze[1].nombre)+' (busca para agregar otros):</div>':'')+'<div id="lst">'+items.map(p=>itemHTML(p,idOf(p),true)).join("")+'</div>';
 }
 function totals(arr){return arr.reduce((a,p)=>{a.u+=num(p.stock);a.c+=num(p.stock)*num(p.costo);a.v+=num(p.stock)*num(p.precio);if(!p.foto)a.sf++;return a;},{u:0,c:0,v:0,sf:0});}
 function viewProductos(){
@@ -1770,7 +1877,7 @@ function viewZonas(){
   let h='<div class="card"><h3>Avance del inventario</h3><div class="mut">'+done+' de '+zs.length+' zonas contadas</div><div class="bar"><i style="width:'+(zs.length?Math.round(done/zs.length*100):0)+'%"></i></div></div>';
   h+='<div class="card"><h3>Nueva zona</h3><div class="mut" style="margin-bottom:4px">Ej. Vitrina 1, Cajón collares, Caja almacén 3</div><div class="row"><input id="zName" class="grow" placeholder="Nombre de la zona"><input id="zResp" class="grow" placeholder="Responsable"></div><button class="btn pri full" id="zAdd" style="margin-top:8px">Agregar zona</button></div>';
   if(!zs.length)h+='<div class="empty">Crea las zonas (vitrinas, cajones, cajas) para repartir el conteo.</div>';
-  zs.forEach(([id,z])=>{const ps=list().filter(p=>p.zona===z.nombre);const u=ps.reduce((a,p)=>a+num(p.stock),0);
+  zs.forEach(([id,z])=>{const ps=list().filter(p=>zq(p,z.nombre)>0);const u=ps.reduce((a,p)=>a+zq(p,z.nombre),0);
     h+='<div class="item"><div class="grow"><div class="name">'+esc(z.nombre)+'</div><div class="mut">'+(z.responsable?esc(z.responsable)+" · ":"")+ps.length+' modelos · '+intf(u)+' unid.</div></div>'+
     '<button class="btn sm" data-zst="'+id+'"><span class="pill '+pillCls(z.estado)+'">'+esc(z.estado||"pendiente")+'</span></button>'+
     '<button class="btn sm" data-zgo="'+esc(z.nombre)+'">Contar</button><button class="btn sm bad" data-zdel="'+id+'">✕</button></div>';});
@@ -1789,7 +1896,7 @@ function issues(){
    ["Sin costo",all.filter(p=>!num(p.costo)).length],
    ["Sin foto de referencia",all.filter(p=>!p.foto).length],
    ["Cantidad en 0",all.filter(p=>!num(p.stock)).length],
-   ["Sin zona asignada",all.filter(p=>!p.zona).length],
+   ["Con cantidades sin zona",hasZones()?all.filter(p=>zq(p,"")>0).length:0],
    ["SKU repetido",by(p=>p.sku)],
    ["Nombre repetido (el sistema podría rechazarlo)",by(p=>norm(pname(p)))],
    ["Código de barras repetido",by(p=>p.barcode)],
@@ -1836,7 +1943,8 @@ function renderSoft(){
 }
 function bind(){
   const q=$("#qIn");if(q)q.addEventListener("input",()=>{S.q=q.value;renderSoft();});
-  const zs=$("#zSel");if(zs)zs.addEventListener("change",()=>{S.zoneFilter=zs.value;render();});
+  const zs=$("#zSel");if(zs)zs.addEventListener("change",()=>{S.zoneFilter=zs.value;S.q="";const e=Array.from(S.zones.entries()).find(x=>x[1].nombre===S.zoneFilter);if(S.tab==="contar"&&e&&(e[1].estado||"pendiente")==="pendiente")writeZone(e[0],Object.assign({},e[1],{estado:"en conteo"})).catch(()=>{});render();});
+  const pi=$("#photoInv");if(pi)pi.onclick=photoInventory;
   const sb=$("#scanBtn");if(sb)sb.onclick=()=>scan(v=>{S.q=v;const hit=list().find(p=>p.barcode===v||p.sku===v);render();if(!hit){confirmBox("Código "+v+" no registrado. ¿Crear producto nuevo con este código?","Crear").then(ok=>{if(ok)openForm(null,{barcode:v});});}});
   const nq=$("#newFromQ");if(nq)nq.onclick=()=>openForm(null,{modelo:S.q});
   const m=$("#main");
@@ -1844,10 +1952,10 @@ function bind(){
   m.querySelectorAll("[data-photo]").forEach(el=>el.onclick=()=>{
     if(!S.canWrite){const p=S.products.get(el.dataset.photo);if(p&&p.foto)showPhoto(p);return;}
     const id=el.dataset.photo;takePhoto(d=>{const p=S.products.get(id);if(!p)return;writeProduct(id,Object.assign({},p,{foto:d,actualizado:new Date().toISOString()})).then(()=>toast("Foto guardada · "+p.sku)).catch(()=>{});renderSoft();});});
-  m.querySelectorAll("[data-p]").forEach(el=>el.onclick=()=>{const id=el.dataset.p;const p=S.products.get(id);bumpStock(id,num(p.stock)+1);const i=m.querySelector('[data-q="'+id+'"]');if(i)i.value=S.products.get(id).stock;});
-  m.querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>{const id=el.dataset.m;const p=S.products.get(id);bumpStock(id,num(p.stock)-1);const i=m.querySelector('[data-q="'+id+'"]');if(i)i.value=S.products.get(id).stock;});
+  m.querySelectorAll("[data-p]").forEach(el=>el.onclick=()=>{const id=el.dataset.p;const p=S.products.get(id);bumpStock(id,zq(p,WZ())+1);const i=m.querySelector('[data-q="'+id+'"]');if(i)i.value=zq(S.products.get(id),WZ());});
+  m.querySelectorAll("[data-m]").forEach(el=>el.onclick=()=>{const id=el.dataset.m;const p=S.products.get(id);bumpStock(id,zq(p,WZ())-1);const i=m.querySelector('[data-q="'+id+'"]');if(i)i.value=zq(S.products.get(id),WZ());});
   m.querySelectorAll("[data-q]").forEach(el=>{el.addEventListener("focus",()=>el.select());el.addEventListener("change",()=>bumpStock(el.dataset.q,num(el.value)));});
-  m.querySelectorAll("[data-cnt]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();const id=el.dataset.cnt;const p=S.products.get(id);if(!p)return;countPhoto(pname(p),v=>{bumpStock(id,v);renderSoft();toast(p.sku+": "+uLabel(p,v));},isPar(p));});
+  m.querySelectorAll("[data-cnt]").forEach(el=>el.onclick=ev=>{ev.stopPropagation();if(!canEditQty())return toast("Primero elige la zona en la que estás contando");const id=el.dataset.cnt;const p=S.products.get(id);if(!p)return;countPhoto(pname(p),v=>{bumpStock(id,v);renderSoft();toast(p.sku+": "+uLabel(p,v));},isPar(p));});
   const lb=$("#lblBtn");if(lb)lb.onclick=()=>printLabels(filtered());
   const ab=$("#aiBtn");if(ab)ab.onclick=()=>aiTrainAll(ab);
   m.querySelectorAll("[data-cat]").forEach(el=>el.onclick=()=>{S.catFilter=el.dataset.cat;render();});
@@ -1862,7 +1970,7 @@ function bind(){
   m.querySelectorAll("[data-zst]").forEach(el=>el.onclick=()=>{const id=el.dataset.zst;const z=S.zones.get(id);const i=ESTADOS.indexOf(z.estado||"pendiente");writeZone(id,Object.assign({},z,{estado:ESTADOS[(i+1)%3]})).catch(()=>{});render();});
   m.querySelectorAll("[data-zok]").forEach(el=>el.onclick=()=>{const id=el.dataset.zok;writeZone(id,Object.assign({},S.zones.get(id),{estado:"contada"})).catch(()=>{});toast("Zona marcada como contada");render();});
   m.querySelectorAll("[data-zre]").forEach(el=>el.onclick=()=>{const id=el.dataset.zre;writeZone(id,Object.assign({},S.zones.get(id),{estado:"en conteo"})).catch(()=>{});render();});
-  m.querySelectorAll("[data-zgo]").forEach(el=>el.onclick=()=>{S.zoneFilter=el.dataset.zgo;S.tab="contar";const id=Array.from(S.zones.entries()).find(e=>e[1].nombre===S.zoneFilter);if(id&&(id[1].estado||"pendiente")==="pendiente")writeZone(id[0],Object.assign({},id[1],{estado:"en conteo"})).catch(()=>{});render();});
+  m.querySelectorAll("[data-zgo]").forEach(el=>el.onclick=()=>{S.zoneFilter=el.dataset.zgo;S.q="";S.tab="contar";const id=Array.from(S.zones.entries()).find(e=>e[1].nombre===S.zoneFilter);if(id&&(id[1].estado||"pendiente")==="pendiente")writeZone(id[0],Object.assign({},id[1],{estado:"en conteo"})).catch(()=>{});render();});
   m.querySelectorAll("[data-zdel]").forEach(el=>el.onclick=async()=>{const z=S.zones.get(el.dataset.zdel);if(await confirmBox("¿Eliminar la zona "+z.nombre+"? Los productos se mantienen.","Eliminar")){delZone(el.dataset.zdel).catch(()=>{});render();}});
   const bx=$("#xXlsx");if(bx){$("#bShare").onclick=shareBackup;$("#bSave").onclick=()=>saveFile(backupName(),backupBlob());$("#bMerge").onclick=()=>{const i=$("#backupInput");i.value="";i.click();};$("#xPos").onclick=exportPos;$("#optAfe").onchange=e=>posSet("afe",e.target.value);$("#optUnd").onchange=e=>posSet("und",e.target.value);bx.onclick=exportXlsx;$("#xCsv").onclick=exportCsv;$("#xZip").onclick=exportZip;$("#xTpl").onclick=exportTemplate;$("#xImp").onclick=()=>{if(!window.XLSX)return toast("El lector de Excel no cargó. Revisa tu conexión.");const i=$("#importInput");i.value="";i.click();};}
 }
@@ -1873,7 +1981,7 @@ $("#fab").onclick=()=>openForm(null);
 
 /* ---------- Export ---------- */
 function stamp(){const d=new Date();const p=n=>String(n).padStart(2,"0");return d.getFullYear()+"-"+p(d.getMonth()+1)+"-"+p(d.getDate())+"_"+p(d.getHours())+p(d.getMinutes());}
-function posRows(){return list().sort((a,b)=>String(a.sku).localeCompare(String(b.sku))).map(p=>({"SKU":p.sku,"Código de barras":p.barcode||p.sku,"Nombre":pname(p),"Categoría":p.cat,"Modelo":p.modelo||"","Material":p.material||"","Color":p.color||"","Talla":p.talla||"","Unidad":isPar(p)?"Par":"Unidad","Stock":num(p.stock),"Costo":num(p.costo),"Precio venta":num(p.precio),"Zona":p.zona||"","Tiene foto":p.foto?"Sí":"No","Notas":p.notas||""}));}
+function posRows(){return list().sort((a,b)=>String(a.sku).localeCompare(String(b.sku))).map(p=>({"SKU":p.sku,"Código de barras":p.barcode||p.sku,"Nombre":pname(p),"Categoría":p.cat,"Modelo":p.modelo||"","Material":p.material||"","Color":p.color||"","Talla":p.talla||"","Unidad":isPar(p)?"Par":"Unidad","Stock":num(p.stock),"Costo":num(p.costo),"Precio venta":num(p.precio),"Zona":zoneText(p),"Tiene foto":p.foto?"Sí":"No","Notas":p.notas||""}));}
 function saveFile(filename,data){
   try{const blob=data instanceof Blob?data:new Blob([data]);const url=URL.createObjectURL(blob);const a=document.createElement("a");a.href=url;a.download=filename;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(url);a.remove();},3000);toast("Descargado en tu carpeta Descargas: "+filename,3500);return Promise.resolve(true);}
   catch(e){toast("No se pudo descargar el archivo");return Promise.resolve(false);}
@@ -1888,8 +1996,8 @@ function exportXlsx(){
   const cr=Array.from(cm.values());const t=totals(list());cr.push({"Categoría":"TOTAL","Modelos":S.products.size,"Unidades":t.u,"Valor costo":Math.round(t.c*100)/100,"Valor venta":Math.round(t.v*100)/100});
   cr.forEach(o=>{o["Valor costo"]=Math.round(o["Valor costo"]*100)/100;o["Valor venta"]=Math.round(o["Valor venta"]*100)/100;});
   const ws2=X.utils.json_to_sheet(cr);ws2["!cols"]=[{wch:16},{wch:10},{wch:10},{wch:14},{wch:14}];X.utils.book_append_sheet(wb,ws2,"Resumen_categoria");
-  const zr=Array.from(S.zones.values()).map(z=>{const ps=list().filter(p=>p.zona===z.nombre);return {"Zona":z.nombre,"Responsable":z.responsable||"","Estado":z.estado||"pendiente","Modelos":ps.length,"Unidades":ps.reduce((a,p)=>a+num(p.stock),0)};});
-  const sz=list().filter(p=>!p.zona);if(sz.length)zr.push({"Zona":"(Sin zona)","Responsable":"","Estado":"","Modelos":sz.length,"Unidades":sz.reduce((a,p)=>a+num(p.stock),0)});
+  const zr=Array.from(S.zones.values()).map(z=>{const ps=list().filter(p=>zq(p,z.nombre)>0);return {"Zona":z.nombre,"Responsable":z.responsable||"","Estado":z.estado||"pendiente","Modelos":ps.length,"Unidades":ps.reduce((a,p)=>a+zq(p,z.nombre),0)};});
+  const sz=list().filter(p=>zq(p,"")>0);if(sz.length)zr.push({"Zona":"(Sin zona)","Responsable":"","Estado":"","Modelos":sz.length,"Unidades":sz.reduce((a,p)=>a+zq(p,""),0)});
   const ws3=X.utils.json_to_sheet(zr.length?zr:[{"Zona":"","Responsable":"","Estado":"","Modelos":0,"Unidades":0}]);ws3["!cols"]=[{wch:22},{wch:18},{wch:12},{wch:10},{wch:10}];X.utils.book_append_sheet(wb,ws3,"Avance_zonas");
   const ws4=X.utils.json_to_sheet(issues().map(([k,n])=>({"Revisión":k,"Cantidad":n})));ws4["!cols"]=[{wch:32},{wch:10}];X.utils.book_append_sheet(wb,ws4,"Observaciones");
   const out=X.write(wb,{bookType:"xlsx",type:"array"});
@@ -2011,7 +2119,14 @@ $("#backupInput").addEventListener("change",async e=>{
   for(const [id,p] of inc){
     if(!p||typeof p!=="object")continue;
     const cur=S.products.get(id);
-    if(cur){ if(String(p.actualizado||"")>String(cur.actualizado||"")){await writeProduct(id,Object.assign({},p,{foto:p.foto||cur.foto||""})).catch(()=>{});nUpd++;}else nSame++; continue; }
+    normP(p);
+    if(cur){
+      const base=String(p.actualizado||"")>String(cur.actualizado||"")?Object.assign({},p,{foto:p.foto||cur.foto||""}):Object.assign({},cur);
+      const pz=Object.assign({},cur.porZona),zt=Object.assign({},cur.zt||{});let ch=base!==cur&&String(p.actualizado||"")>String(cur.actualizado||"");
+      for(const z in p.porZona){const ti=String((p.zt||{})[z]||""),tc=String(zt[z]||"");if(!(z in pz)||ti>tc){if(pz[z]!==p.porZona[z])ch=true;pz[z]=p.porZona[z];zt[z]=ti||tc;}}
+      if(ch){base.porZona=pz;base.zt=zt;recompute(base);await writeProduct(id,base).catch(()=>{});nUpd++;}else nSame++;
+      continue;
+    }
     const q=Object.assign({},p);
     const clash=list().find(x=>x.sku===q.sku);
     if(clash){const old=q.sku;q.sku=genSku(q);renum.push(old+" → "+q.sku);}
@@ -2040,10 +2155,11 @@ $("#importInput").addEventListener("change",async e=>{
       const cat=o.cat?(CATS.find(c=>norm(c.n)===norm(o.cat)||norm(o.cat).startsWith(norm(c.n).slice(0,4)))||{n:o.cat}).n:"Otro";
       await ensureCat(cat).catch(()=>{});
       const d={cat,modelo:o.modelo||"",material:o.material||"",color:o.color||"",talla:o.talla||"",barcode:o.barcode||"",stock:Math.max(0,Math.round(num(o.stock))),costo:num(o.costo),precio:num(o.precio),zona:o.zona||"",notas:o.notas||"",unidad:o.unidad?(/par/i.test(o.unidad)?"PAR":"UND"):((catOf(cat)||{}).par?"PAR":"UND")};
+      d.porZona={[d.zona||""]:d.stock};d.zt={[d.zona||""]:now};recompute(d);
       if(d.zona&&!Array.from(S.zones.values()).some(z=>z.nombre===d.zona))await writeZone(uid(),{nombre:d.zona,responsable:"",estado:"pendiente"}).catch(()=>{});
       const skuU=(o.sku||"").toUpperCase();
       const hit=skuU?Array.from(S.products.entries()).find(([k,p])=>p.sku===skuU):null;
-      if(hit){await writeProduct(hit[0],Object.assign({},hit[1],d,{actualizado:now})).catch(()=>{});nUpd++;}
+      if(hit){const nd=Object.assign({},hit[1],d,{porZona:Object.assign({},hit[1].porZona,d.porZona),zt:Object.assign({},hit[1].zt,d.zt),actualizado:now});recompute(nd);await writeProduct(hit[0],nd).catch(()=>{});nUpd++;}
       else{const sku=skuU||genSku(d);await writeProduct(uid(),Object.assign(d,{sku,foto:"",contado:false,creado:now,actualizado:now})).catch(()=>{});nNew++;}
       if(msg)msg.textContent="Importando… "+(i+1)+" / "+rows.length;
     }

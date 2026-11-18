@@ -47,6 +47,22 @@ ZONAS Y CATEGORÍAS (versión 3)
 - Los productos por par: la cantidad es en pares, el precio es por par, el conteo en
   foto divide las piezas entre 2, y en la carga masiva salen con unidad de medida PAR.
 
+INVENTARIO CON FOTO Y POR ZONAS (versión 4)
+- En "Contar" elige UNA VEZ la zona en la que estás (📍). Todo lo que cuentes o
+  fotografíes se suma a esa zona. Un mismo producto puede tener cantidades en varias
+  zonas; el total se suma solo (y es el que va a la carga masiva).
+- Botón "📷 Inventariar con foto": toma la foto y la app busca el producto parecido
+  entre los registrados (muestra los 3 más parecidos con su foto). Confirmas y suma
+  la cantidad (o usa "Contar en la foto"). Si no está, "crear producto nuevo" abre el
+  formulario con la foto, la categoría, el tono y el material sugeridos.
+  Luego "Siguiente foto" para seguir sin pasos extra.
+- Cada foto confirmada se guarda como ejemplo del producto: la búsqueda mejora con el uso.
+- Tono: detecta Dorado / Plateado / Rosado por el color.
+- Material (plata o acero): se SUGIERE según productos parecidos ya registrados.
+  En foto se ven casi iguales: confírmalo con el sello 925 o la etiqueta del proveedor.
+- Al combinar celulares, se juntan las cantidades de cada zona (si dos personas contaron
+  zonas distintas del mismo producto, se conservan ambas).
+
 ACTUALIZAR LA APP
 - Reemplaza index.html en GitHub. Los datos guardados en los celulares no se borran.
 - No borres los datos de Chrome del celular sin antes guardar un respaldo.
