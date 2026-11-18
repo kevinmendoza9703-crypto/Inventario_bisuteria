@@ -1425,12 +1425,12 @@ function hasZones(){return S.zones.size>0;}
 function WZ(){return S.zoneFilter||"";}
 function canEditQty(){return !hasZones()||!!S.zoneFilter;}
 function zq(p,z){return num((p&&p.porZona||{})[z]);}
-function inZone(p,z){return !!(p&&p.porZona&&Object.prototype.hasOwnProperty.call(p.porZona,z));}
+function inZone(p,z){return !!(p&&p.porZona&&Object.prototype.hasOwnProperty.call(p.porZona,z))&&!(p.zout&&p.zout[z]&&!num(p.porZona[z]));}
 function recompute(p){const pz=p.porZona||{};let t=0;for(const k in pz)t+=Math.max(0,num(pz[k]));p.stock=t;
   p.zona=Object.keys(pz).filter(k=>num(pz[k])>0).map(k=>k||"Sin zona").join(", ");return p;}
-function normP(p){if(!p||typeof p!=="object")return p;if(!p.porZona||typeof p.porZona!=="object"){p.porZona={};const z=p.zona||"";if(num(p.stock)||z)p.porZona[z]=Math.max(0,Math.round(num(p.stock)));}if(!p.zt)p.zt={};return recompute(p);}
+function normP(p){if(!p||typeof p!=="object")return p;if(!p.porZona||typeof p.porZona!=="object"){p.porZona={};const z=p.zona||"";if(num(p.stock)||z)p.porZona[z]=Math.max(0,Math.round(num(p.stock)));}if(!p.zt)p.zt={};if(!p.zout)p.zout={};return recompute(p);}
 function zoneText(p){const pz=p.porZona||{};const ks=Object.keys(pz).filter(k=>num(pz[k])>0);if(!ks.length)return hasZones()?"Sin contar":"";return ks.map(k=>(k||"Sin zona")+": "+intf(num(pz[k]))).join(" · ");}
-function withZQ(p,z,q){const d=Object.assign({},p,{porZona:Object.assign({},p.porZona||{}),zt:Object.assign({},p.zt||{})});d.porZona[z]=Math.max(0,Math.round(num(q)));d.zt[z]=new Date().toISOString();d.contado=true;d.actualizado=d.zt[z];return recompute(d);}
+function withZQ(p,z,q){const d=Object.assign({},p,{porZona:Object.assign({},p.porZona||{}),zt:Object.assign({},p.zt||{}),zout:Object.assign({},p.zout||{})});delete d.zout[z];d.porZona[z]=Math.max(0,Math.round(num(q)));d.zt[z]=new Date().toISOString();d.contado=true;d.actualizado=d.zt[z];return recompute(d);}
 function setZQ(id,z,q){
   const p=S.products.get(id);if(!p)return;
   S.products.set(id,withZQ(p,z,q));
@@ -1492,18 +1492,78 @@ function aiLoad(){
   return AI.loading;
 }
 function imgFromData(src){return new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=rej;i.src=src;});}
-async function aiEmbed(foto){
-  const m=await aiLoad();const img=await imgFromData(foto);
-  const t=m.infer(img,true);const v=Array.from(await t.data());t.dispose();
-  let n=0;for(const x of v)n+=x*x;n=Math.sqrt(n)||1;return v.map(x=>x/n);
+/* Aísla la pieza del fondo: recorta el producto y pinta el fondo de gris neutro */
+const FEAT_VER=2;
+function isolate(img){
+  const W=256,H=Math.max(8,Math.round(img.height*256/img.width));
+  const c=document.createElement("canvas");c.width=W;c.height=H;const g=c.getContext("2d");g.drawImage(img,0,0,W,H);
+  const px=g.getImageData(0,0,W,H).data;const N=W*H;
+  const br=[],bg=[],bb=[];const band=Math.max(3,Math.round(Math.min(W,H)*0.04));
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++)if(x<band||y<band||x>=W-band||y>=H-band){const i=(y*W+x)*4;br.push(px[i]);bg.push(px[i+1]);bb.push(px[i+2]);}
+  const med=a=>{a.sort((x,y)=>x-y);return a[a.length>>1];};const R=med(br),G=med(bg),B=med(bb);
+  const d=new Uint8Array(N);const hist=new Uint32Array(256);
+  for(let i=0,j=0;i<N;i++,j+=4){const v=Math.min(255,Math.round(Math.sqrt((px[j]-R)**2+(px[j+1]-G)**2+(px[j+2]-B)**2)));d[i]=v;hist[v]++;}
+  let sum=0;for(let t=0;t<256;t++)sum+=t*hist[t];let sB=0,wB=0,best=0,th=30;
+  for(let t=0;t<256;t++){wB+=hist[t];if(!wB)continue;const wF=N-wB;if(!wF)break;sB+=t*hist[t];const mB=sB/wB,mF=(sum-sB)/wF;const v=wB*wF*(mB-mF)**2;if(v>best){best=v;th=t;}}
+  th=Math.max(22,th*0.8);
+  let m=new Uint8Array(N);for(let i=0;i<N;i++)m[i]=d[i]>th?1:0;
+  const dil=(a,r)=>{const o=new Uint8Array(N);for(let y=0;y<H;y++)for(let x=0;x<W;x++){if(!a[y*W+x])continue;for(let dy=-r;dy<=r;dy++){const yy=y+dy;if(yy<0||yy>=H)continue;for(let dx=-r;dx<=r;dx++){const xx=x+dx;if(xx>=0&&xx<W)o[yy*W+xx]=1;}}}return o;};
+  const md=dil(m,2);
+  // componentes: se quedan las piezas, se descartan manchas y bordes
+  const lab=new Int32Array(N);const comps=[];const st=[];
+  for(let i=0;i<N;i++){if(!md[i]||lab[i])continue;const id=comps.length+1;let a=0,x0=W,y0=H,x1=0,y1=0;st.push(i);lab[i]=id;
+    while(st.length){const k=st.pop();a++;const x=k%W,y=(k/W)|0;if(x<x0)x0=x;if(x>x1)x1=x;if(y<y0)y0=y;if(y>y1)y1=y;
+      if(x>0&&!lab[k-1]&&md[k-1]){lab[k-1]=id;st.push(k-1);}if(x<W-1&&!lab[k+1]&&md[k+1]){lab[k+1]=id;st.push(k+1);}
+      if(y>0&&!lab[k-W]&&md[k-W]){lab[k-W]=id;st.push(k-W);}if(y<H-1&&!lab[k+W]&&md[k+W]){lab[k+W]=id;st.push(k+W);}}
+    comps.push({id,a,x0,y0,x1,y1});}
+  const big=comps.filter(o=>o.a>=N*0.002&&!((o.x1-o.x0)>W*0.97&&(o.y1-o.y0)>H*0.97));
+  const maxA=big.reduce((a,o)=>Math.max(a,o.a),0);const keep=big.filter(o=>o.a>=maxA*0.08);
+  let x0=0,y0=0,x1=W-1,y1=H-1,found=keep.length>0;
+  if(found){x0=Math.min(...keep.map(o=>o.x0));y0=Math.min(...keep.map(o=>o.y0));x1=Math.max(...keep.map(o=>o.x1));y1=Math.max(...keep.map(o=>o.y1));}
+  const ids=new Set(keep.map(o=>o.id));const fg=new Uint8Array(N);for(let i=0;i<N;i++)fg[i]=found?(ids.has(lab[i])?1:0):1;
+  const bw=x1-x0+1,bh=y1-y0+1;
+  // forma: proporción, relleno y huecos (aros, argollas, eslabones)
+  let fa=0;for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++)if(m[y*W+x]&&fg[y*W+x])fa++;
+  const out=new Uint8Array(bw*bh);const q=[];
+  for(let y=0;y<bh;y++)for(let x=0;x<bw;x++){if(x&&y&&x<bw-1&&y<bh-1)continue;const k=(y+y0)*W+(x+x0);if(!md[k]&&!out[y*bw+x]){out[y*bw+x]=1;q.push(y*bw+x);}}
+  while(q.length){const k=q.pop();const x=k%bw,y=(k/bw)|0;const nb=[[x-1,y],[x+1,y],[x,y-1],[x,y+1]];for(const [xx,yy] of nb){if(xx<0||yy<0||xx>=bw||yy>=bh)continue;const kk=yy*bw+xx;if(out[kk]||md[(yy+y0)*W+(xx+x0)])continue;out[kk]=1;q.push(kk);}}
+  let holes=0;for(let y=0;y<bh;y++)for(let x=0;x<bw;x++)if(!out[y*bw+x]&&!md[(y+y0)*W+(x+x0)])holes++;
+  const area=bw*bh;const sh={ar:Math.min(bw,bh)/Math.max(bw,bh),fill:fa/area,hole:holes/area,n:keep.length};
+  // color de la pieza (sin fondo): tono 8 x saturación 4
+  const hs=new Array(32).fill(0);let nf=0;
+  for(let y=y0;y<=y1;y++)for(let x=x0;x<=x1;x++){const k=y*W+x;if(!m[k]||!fg[k])continue;const j=k*4;const r=px[j],gg=px[j+1],b=px[j+2];const mx=Math.max(r,gg,b),mn=Math.min(r,gg,b);
+    const sat=mx?(mx-mn)/mx:0;let h=0;if(mx!==mn){if(mx===r)h=60*(((gg-b)/(mx-mn))%6);else if(mx===gg)h=60*((b-r)/(mx-mn)+2);else h=60*((r-gg)/(mx-mn)+4);}if(h<0)h+=360;
+    hs[Math.min(7,(h/45)|0)*4+Math.min(3,(sat*4)|0)]++;nf++;}
+  if(nf)for(let i=0;i<32;i++)hs[i]/=nf;
+  // recorte cuadrado de la pieza con fondo neutro, para el reconocimiento
+  const mg=Math.round(Math.max(bw,bh)*0.08);const side=Math.max(bw,bh)+2*mg;const cx=x0+bw/2,cy=y0+bh/2;
+  const S2=224,crop=document.createElement("canvas");crop.width=S2;crop.height=S2;const cg=crop.getContext("2d");
+  const sc=img.width/W;cg.fillStyle="rgb(238,238,238)";cg.fillRect(0,0,S2,S2);
+  cg.drawImage(img,(cx-side/2)*sc,(cy-side/2)*sc,side*sc,side*sc,0,0,S2,S2);
+  const cd=cg.getImageData(0,0,S2,S2);const mk=dil(md,2);
+  for(let y=0;y<S2;y++)for(let x=0;x<S2;x++){const ox=Math.floor(cx-side/2+x*side/S2),oy=Math.floor(cy-side/2+y*side/S2);const inside=ox>=0&&oy>=0&&ox<W&&oy<H;
+    if(!inside||!mk[oy*W+ox]||(found&&lab[oy*W+ox]>0&&!ids.has(lab[oy*W+ox]))){const j=(y*S2+x)*4;cd.data[j]=238;cd.data[j+1]=238;cd.data[j+2]=238;}}
+  cg.putImageData(cd,0,0);
+  return {crop,hs,sh,found};
 }
+function flipCanvas(c){const f=document.createElement("canvas");f.width=c.width;f.height=c.height;const g=f.getContext("2d");g.translate(c.width,0);g.scale(-1,1);g.drawImage(c,0,0);return f;}
+async function embedCanvas(m,c){const t=m.infer(c,true);const v=Array.from(await t.data());t.dispose();return v;}
+async function aiFeat(foto){
+  const m=await aiLoad();const img=await imgFromData(foto);const iso=isolate(img);
+  const a=await embedCanvas(m,iso.crop),b=await embedCanvas(m,flipCanvas(iso.crop));
+  const v=a.map((x,i)=>x+b[i]);let n=0;for(const x of v)n+=x*x;n=Math.sqrt(n)||1;
+  const t=metalTone(img);
+  return {v:v.map(x=>x/n),hs:iso.hs,sh:iso.sh,tone:t?t.tono:"",crop:iso.crop,ver:FEAT_VER};
+}
+async function aiEmbed(foto){return (await aiFeat(foto)).v;}
 async function aiLearn(id,p){
   if(!p||!p.foto||!p.cat)return;
-  try{const v=await aiEmbed(p.foto);const e={cat:p.cat,v,n:p.foto.length};AI.emb.set(id,e);await idbPut("emb",id,e);}catch(e){}
+  try{const f=await aiFeat(p.foto);const e={cat:p.cat,v:f.v,hs:f.hs,sh:f.sh,tone:f.tone,ver:FEAT_VER,n:p.foto.length};AI.emb.set(id,e);await idbPut("emb",id,e);}catch(e){}
 }
 function aiForget(id){Array.from(AI.emb.keys()).filter(k=>k===id||k.startsWith(id+"#")).forEach(k=>{AI.emb.delete(k);idbDel("emb",k).catch(()=>{});});}
-function aiStats(){const c={};AI.emb.forEach((e,id)=>{if(e.pid)return;const p=S.products.get(id);if(!p)return;c[p.cat]=(c[p.cat]||0)+1;});return c;}
-function embList(excludeId){const ex=[];AI.emb.forEach((e,k)=>{const pid=e.pid||k;const p=S.products.get(pid);if(p&&pid!==excludeId)ex.push({pid,p,v:e.v});});return ex;}
+function aiStats(){const c={};AI.emb.forEach((e,id)=>{if(e.pid||e.ver!==FEAT_VER)return;const p=S.products.get(id);if(!p)return;c[p.cat]=(c[p.cat]||0)+1;});return c;}
+function embList(excludeId){const ex=[];AI.emb.forEach((e,k)=>{if(e.ver!==FEAT_VER)return;const pid=e.pid||k;const p=S.products.get(pid);if(p&&pid!==excludeId)ex.push({pid,p,v:e.v,e});});return ex;}
+function aiOutdated(){return list().map(p=>[idOf(p),p]).filter(([id,p])=>p.foto&&(!AI.emb.has(id)||AI.emb.get(id).n!==p.foto.length||AI.emb.get(id).ver!==FEAT_VER));}
 function dot(a,b){let d=0;for(let i=0;i<a.length;i++)d+=a[i]*b[i];return d;}
 function guessField(v,field,excludeId,minN){
   const ex=embList(excludeId).filter(x=>String(x.p[field]||"").trim());
@@ -1518,15 +1578,29 @@ async function aiGuess(foto,excludeId){
   const ex=embList(excludeId);if(ex.length<8||new Set(ex.map(x=>x.p.cat)).size<2)return {need:true,have:ex.length};
   const v=await aiEmbed(foto);const r=guessField(v,"cat",excludeId,8);return r?{cat:r.val,conf:r.conf}:{need:true,have:ex.length};
 }
-function matchProducts(v,k){
-  const best=new Map();embList().forEach(x=>{const sc=dot(v,x.v);if(!best.has(x.pid)||best.get(x.pid)<sc)best.set(x.pid,sc);});
-  return Array.from(best.entries()).sort((a,b)=>b[1]-a[1]).slice(0,k||3).map(([pid,sc])=>({pid,p:S.products.get(pid),s:sc}));
+const clamp01=x=>Math.max(0,Math.min(1,x));
+function simParts(q,e){
+  const d=clamp01((dot(q.v,e.v)-0.55)/0.4);                       // detalle / diseño (red neuronal, sin fondo)
+  let c=0;if(q.hs&&e.hs)for(let i=0;i<32;i++)c+=Math.min(q.hs[i],e.hs[i]);  // color de la pieza
+  let f=0.5;if(q.sh&&e.sh)f=clamp01(1-(Math.abs(q.sh.ar-e.sh.ar)*0.9+Math.abs(q.sh.fill-e.sh.fill)*1.2+Math.abs(q.sh.hole-e.sh.hole)*1.6)); // forma
+  const t=q.tone&&e.tone?(q.tone===e.tone?1:0):0.5;              // tono del metal
+  return {d,c,f,t,s:0.55*d+0.2*c+0.15*f+0.1*t};
 }
-async function aiAddExample(pid,v){ // otra foto del mismo producto: mejora la búsqueda
+function matchProducts(q,k){
+  const best=new Map();
+  embList().forEach(x=>{const r=simParts(q,x.e);if(!best.has(x.pid)||best.get(x.pid).s<r.s)best.set(x.pid,r);});
+  const catG=q.v?guessField(q.v,"cat",null,8):null;
+  return Array.from(best.entries()).map(([pid,r])=>{const p=S.products.get(pid);
+      // si la categoría que sugiere la foto es otra con seguridad, baja el puntaje
+      if(catG&&catG.conf>=0.75&&norm(catG.val)!==norm(p.cat))r.s*=0.85;
+      return {pid,p,s:r.s,r};})
+    .sort((a,b)=>b.s-a.s).slice(0,k||3);
+}
+async function aiAddExample(pid,f){ // otra foto del mismo producto: mejora la búsqueda
   const p=S.products.get(pid);if(!p)return;
   const extras=Array.from(AI.emb.keys()).filter(k=>k.startsWith(pid+"#")).sort();
   while(extras.length>=4){const k=extras.shift();AI.emb.delete(k);idbDel("emb",k).catch(()=>{});}
-  const k=pid+"#"+Date.now();const e={pid,cat:p.cat,v,n:0};AI.emb.set(k,e);idbPut("emb",k,e).catch(()=>{});
+  const k=pid+"#"+Date.now();const e={pid,cat:p.cat,v:f.v,hs:f.hs,sh:f.sh,tone:f.tone,ver:FEAT_VER,n:0};AI.emb.set(k,e);idbPut("emb",k,e).catch(()=>{});
 }
 /* Tono del metal por color: dorado / plateado / rosado */
 function metalTone(img){
@@ -1559,8 +1633,15 @@ async function runPhotoInventory(file){
     '<div class="mut">📍 Zona: <b>'+esc(Z||"Sin zona")+'</b></div><div class="row" style="gap:10px;margin-top:8px"><img src="'+foto+'" alt="" style="width:110px;height:110px;object-fit:cover;border-radius:10px;flex:none"><div class="grow" id="piStatus">Buscando el producto entre los registrados…</div></div><div id="piBody"></div></div></div>';
   $("#piX").onclick=()=>{box.innerHTML="";};
   const tone=metalTone(img);
-  let v=null,err="";
-  try{v=await aiEmbed(foto);}catch(e){err="El reconocimiento necesita internet la primera vez para descargarse.";}
+  let F=null,v=null,err="";
+  try{
+    await aiLoad();
+    const todo=aiOutdated();
+    if(todo.length){for(let i=0;i<todo.length;i++){if($("#piStatus"))$("#piStatus").textContent="Preparando las fotos registradas ("+(i+1)+" de "+todo.length+")… solo la primera vez.";await aiLearn(todo[i][0],todo[i][1]);}}
+    Array.from(AI.emb.entries()).forEach(([k,e])=>{if(e.pid&&e.ver!==FEAT_VER){AI.emb.delete(k);idbDel("emb",k).catch(()=>{});}});
+    if($("#piStatus"))$("#piStatus").textContent="Buscando el producto entre los registrados…";
+    F=await aiFeat(foto);v=F.v;
+  }catch(e){err="El reconocimiento necesita internet la primera vez para descargarse.";}
   if(!$("#piBody"))return;
   const sugCat=v?guessField(v,"cat",null,8):null, sugMat=v?guessField(v,"material",null,6):null;
   const newPreset=()=>{const pr={foto,stock:1};const notes=[];
@@ -1569,16 +1650,17 @@ async function runPhotoInventory(file){
     if(sugMat&&sugMat.conf>=0.5){pr.material=sugMat.val;notes.push("Material <b>"+esc(sugMat.val)+"</b> ("+Math.round(sugMat.conf*100)+"%)");}
     if(notes.length)pr._nota="🧠 Sugerido por la foto: "+notes.join(" · ")+".<br><span class='mut'>Revísalo. Plata y acero se ven casi iguales: confirma el material con el sello <b>925</b> (plata) o la etiqueta del proveedor.</span>";
     return pr;};
-  const cands=v?matchProducts(v,3):[];
+  const cands=F?matchProducts(F,3):[];
+  if(F&&$("#piStatus")){const prev=document.createElement("img");prev.src=F.crop.toDataURL("image/jpeg",0.8);prev.alt="";prev.title="Pieza aislada del fondo";prev.style.cssText="width:56px;height:56px;border-radius:8px;flex:none;border:1px solid var(--line)";const row=$("#piStatus").parentNode;row.insertBefore(prev,$("#piStatus"));}
   const qtyRow=(p)=>'<div class="row" style="margin-top:10px"><div class="grow"><label style="margin-top:0">Cantidad a sumar'+(p&&isPar(p)?" (pares)":"")+'</label><input id="piQty" inputmode="numeric" value="1" style="font-size:20px;font-weight:700"></div><button class="btn" id="piCnt" style="align-self:flex-end">🔢 Contar en la foto</button></div>';
   let h="";
   if(!cands.length){
     $("#piStatus").innerHTML=err?esc(err):(embList().length?"No se encontró un producto parecido.":"Aún no hay productos con foto para comparar. Registra este como el primero.");
     h+='<button class="btn pri full" id="piNew" style="margin-top:12px">＋ Crear producto nuevo con esta foto</button>';
   }else{
-    const top=cands[0],gap=top.s-(cands[1]?cands[1].s:0);const sure=top.s>=0.9&&gap>=0.03;
-    $("#piStatus").innerHTML=sure?"✅ <b>Encontrado.</b> Confirma que es el mismo producto.":"¿Es alguno de estos? Elige el correcto o crea uno nuevo.";
-    h+='<div style="margin-top:10px">'+cands.map((c,i)=>'<label class="item" style="cursor:pointer;margin:0 0 8px;color:var(--ink)"><input type="radio" name="piSel" value="'+c.pid+'" '+(i===0&&sure?"checked":"")+' style="width:auto"><img src="'+(c.p.foto||"")+'" alt="" style="width:58px;height:58px;object-fit:cover;border-radius:9px;flex:none;background:var(--acc2)"><div class="grow"><div class="name">'+esc(pname(c.p))+'</div><div class="sku">'+esc(c.p.sku)+'</div><div class="mut">Parecido '+Math.round(Math.max(0,c.s)*100)+'% · En esta zona: '+uLabel(c.p,zq(c.p,Z))+'</div></div></label>').join("")+'</div>';
+    const top=cands[0],gap=top.s-(cands[1]?cands[1].s:0);const sure=top.s>=0.8&&gap>=0.06;
+    $("#piStatus").innerHTML=sure?"✅ <b>Encontrado.</b> Confirma que es el mismo producto.":(top.s<0.55?"No encontré uno igual. Puede ser un producto <b>nuevo</b>; revisa los más parecidos:":"¿Es alguno de estos? Elige el correcto o crea uno nuevo.");
+    h+='<div style="margin-top:10px">'+cands.map((c,i)=>'<label class="item" style="cursor:pointer;margin:0 0 8px;color:var(--ink)"><input type="radio" name="piSel" value="'+c.pid+'" '+(i===0&&sure?"checked":"")+' style="width:auto"><img src="'+(c.p.foto||"")+'" alt="" style="width:58px;height:58px;object-fit:cover;border-radius:9px;flex:none;background:var(--acc2)"><div class="grow"><div class="name">'+esc(pname(c.p))+'</div><div class="sku">'+esc(c.p.sku)+'</div><div class="mut"><b>Coincide '+Math.round(c.s*100)+'%</b> · diseño '+Math.round(c.r.d*100)+' · forma '+Math.round(c.r.f*100)+' · color '+Math.round(c.r.c*100)+(F.tone&&c.r.t===0?' · <span style="color:var(--bad)">otro tono</span>':'')+'</div><div class="mut">En esta zona: '+uLabel(c.p,zq(c.p,Z))+'</div></div></label>').join("")+'</div>';
     h+=qtyRow(top.p)+'<button class="btn pri full" id="piAdd" style="margin-top:10px;padding:14px">Sumar al inventario</button><button class="btn full" id="piNew" style="margin-top:8px">No es ninguno: crear producto nuevo</button>';
   }
   $("#piBody").innerHTML=h;
@@ -1588,7 +1670,7 @@ async function runPhotoInventory(file){
     const sel=document.querySelector('input[name="piSel"]:checked');if(!sel)return toast("Toca el producto correcto o crea uno nuevo");
     const pid=sel.value,p=S.products.get(pid);if(!p)return;const q=qtyVal();
     S.products.set(pid,withZQ(p,Z,zq(p,Z)+q));writeProduct(pid,S.products.get(pid)).catch(()=>{});
-    if(v)aiAddExample(pid,v);
+    if(F)aiAddExample(pid,F);
     box.innerHTML='<div class="modal" style="z-index:25"><div class="sheet"><h2>✅ Sumado</h2><p><b>'+esc(pname(p))+'</b><br>+'+q+' → '+uLabel(p,zq(S.products.get(pid),Z))+' en '+esc(Z||"sin zona")+'</p><div style="display:grid;gap:8px"><button class="btn pri full" id="piNext" style="padding:14px">📷 Siguiente foto</button><button class="btn full" id="piEnd">Terminar</button></div></div></div>';
     $("#piNext").onclick=()=>{box.innerHTML="";photoInventory();};$("#piEnd").onclick=()=>{box.innerHTML="";};
     render();
@@ -1596,7 +1678,7 @@ async function runPhotoInventory(file){
   $("#piNew").onclick=()=>{const pr=newPreset();if($("#piQty"))pr.stock=qtyVal();box.innerHTML="";openForm(null,pr);};
 }
 async function aiTrainAll(btn){
-  const todo=list().map(p=>[idOf(p),p]).filter(([id,p])=>p.foto&&(!AI.emb.has(id)||AI.emb.get(id).n!==p.foto.length));
+  const todo=aiOutdated();
   if(!todo.length)return toast("Todas las fotos ya están aprendidas");
   try{if(btn)btn.textContent="Cargando motor de reconocimiento…";await aiLoad();}catch(e){if(btn)btn.textContent="Aprender de las fotos";return toast("Se necesita internet la primera vez para descargar el reconocimiento.",4500);}
   for(let i=0;i<todo.length;i++){if(btn)btn.textContent="Aprendiendo "+(i+1)+" / "+todo.length+"…";await aiLearn(todo[i][0],todo[i][1]);}
@@ -1736,10 +1818,10 @@ function openForm(id,preset){
     <div><label>Talla / medida</label><input id="f_talla" value="${esc(p.talla)}" placeholder="Ej. 7, 45 cm"></div>
     <div><label>Costo (S/)</label><input id="f_costo" inputmode="decimal" value="${esc(p.costo)}"></div>
     <div><label>Precio venta (S/)</label><input id="f_precio" inputmode="decimal" value="${esc(p.precio)}"></div>
-    <div><label id="f_stockL">Cantidad contada</label><div class="row"><input id="f_stock" inputmode="numeric" value="${esc(ex?zq(ex,WZ()):p.stock)}"><button class="btn sm" id="fCnt" title="Contar en foto">🔢</button></div></div>
+    <div class="${hasZones()?"hidden":""}"><label id="f_stockL">Cantidad contada</label><div class="row"><input id="f_stock" inputmode="numeric" value="${esc(ex?zq(ex,WZ()):p.stock)}"><button class="btn sm" id="fCnt" title="Contar en foto">🔢</button></div></div>
     <div><label>Código de barras</label><div class="row"><input id="f_barcode" value="${esc(p.barcode)}" placeholder="Opcional"><button class="btn sm" id="fScan" title="Escanear">▦</button></div></div>
    </div>
-   <div class="mut" style="margin-top:6px">📍 Se cuenta en: <b>${esc(WZ()||"Sin zona")}</b>${ex&&zoneText(ex)?" · Total: "+esc(zoneText(ex)):""}</div>
+   ${hasZones()?'<div id="zEd" style="background:#fff;border:1px solid var(--line);border-radius:12px;padding:10px;margin-top:10px"></div>':'<div class="mut" style="margin-top:6px">📍 Sin zonas creadas: la cantidad va como "Sin zona".</div>'}
    <label>SKU (se genera solo)</label><input id="f_sku" style="font-family:ui-monospace,Menlo,monospace">
    <label>Notas</label><input id="f_notas" value="${esc(p.notas)}" placeholder="Opcional">
    <div class="codes" id="fCodes"></div>
@@ -1756,6 +1838,25 @@ function openForm(id,preset){
   const regen=()=>{if(!skuTouched)skuIn.value=genSku(cur());};
   const uniUI=()=>{const par=$("#f_uni").value==="PAR";$("#f_stockL").textContent="Cantidad"+(hasZones()?" en "+(WZ()||"sin zona"):"")+(par?" (pares)":"");};
   $("#f_uni").value=p.unidad||((catOf(p.cat)||{}).par?"PAR":"UND");uniUI();
+  /* Editor de zonas: cantidades por zona, mover o quitar */
+  const zNames=Array.from(S.zones.values()).map(z=>z.nombre).sort((a,b)=>a.localeCompare(b));
+  let zRows=[];
+  if(ex){Object.keys(ex.porZona||{}).forEach(z=>{if(inZone(ex,z)&&(num(ex.porZona[z])>0||z===WZ()))zRows.push({z,q:num(ex.porZona[z]),orig:true});});
+    if(WZ()&&!zRows.some(r=>r.z===WZ()))zRows.unshift({z:WZ(),q:"",orig:false});}
+  else zRows.push({z:WZ(),q:(preset&&preset.stock!=null&&preset.stock!=="")?num(preset.stock):"",orig:false});
+  const drawZ=()=>{const box=$("#zEd");if(!box)return;const par=$("#f_uni").value==="PAR";
+    const opts=z=>'<option value=""'+(z===""?" selected":"")+'>Sin zona</option>'+zNames.concat(zRows.map(r=>r.z).filter(n=>n&&!zNames.includes(n))).map(n=>'<option'+(n===z?" selected":"")+'>'+esc(n)+'</option>').join("");
+    const tot=zRows.reduce((a,r)=>a+num(r.q),0);
+    box.innerHTML='<div class="row" style="justify-content:space-between"><b>📍 Cantidades por zona'+(par?" (pares)":"")+'</b><span class="mut">Total: <b>'+intf(tot)+'</b></span></div>'+
+      '<div class="mut" style="margin:2px 0 6px">Cambia la zona para moverlo; ✕ lo quita de esa zona.</div>'+
+      zRows.map((r,i)=>'<div class="row" style="margin-top:6px"><select data-zr="'+i+'" class="grow" style="min-width:0">'+opts(r.z)+'</select><input data-zq="'+i+'" inputmode="numeric" value="'+esc(r.q)+'" placeholder="0" style="width:70px;text-align:center;font-weight:650"><button class="btn sm" data-zc="'+i+'" title="Contar en foto">🔢</button><button class="btn sm bad" data-zx="'+i+'">✕</button></div>').join("")+
+      '<button class="btn sm" id="zAddRow" style="margin-top:8px">＋ Agregar otra zona</button>';
+    box.querySelectorAll("[data-zr]").forEach(el=>el.onchange=()=>{zRows[+el.dataset.zr].z=el.value;drawZ();});
+    box.querySelectorAll("[data-zq]").forEach(el=>el.oninput=()=>{zRows[+el.dataset.zq].q=el.value;const t=zRows.reduce((a,r)=>a+num(r.q),0);box.querySelector("b+span b, span b").textContent=intf(t);});
+    box.querySelectorAll("[data-zx]").forEach(el=>el.onclick=()=>{zRows.splice(+el.dataset.zx,1);drawZ();});
+    box.querySelectorAll("[data-zc]").forEach(el=>el.onclick=()=>{const i=+el.dataset.zc;countPhoto(pname(cur())||"Producto",v=>{zRows[i].q=v;drawZ();},$("#f_uni").value==="PAR");});
+    $("#zAddRow").onclick=()=>{const free=zNames.find(n=>!zRows.some(r=>r.z===n));zRows.push({z:free!==undefined?free:"",q:"",orig:false});drawZ();};};
+  drawZ();$("#f_uni").addEventListener("change",drawZ);
   $("#f_uni").addEventListener("change",()=>{uniTouched=true;uniUI();});
   let lastCat=$("#f_cat").value;
   $("#f_cat").addEventListener("change",()=>{const v=$("#f_cat").value;
@@ -1806,7 +1907,14 @@ function openForm(id,preset){
     const now=new Date().toISOString();
     const qty=c.stock;delete c.stock;
     let data=Object.assign({},ex||{porZona:{},zt:{}},c,{sku,foto,contado:true,actualizado:now,creado:(ex&&ex.creado)||now});
-    data=(!ex||qty!==zq(ex,WZ()))?withZQ(data,WZ(),qty):recompute(data);data.actualizado=now;
+    if(hasZones()){
+      const np={};zRows.forEach(r=>{const q=Math.max(0,Math.round(num(r.q)));if(r.q===""&&!r.orig)return;np[r.z]=(np[r.z]||0)+q;});
+      const pz=Object.assign({},(ex&&ex.porZona)||{}),zt=Object.assign({},(ex&&ex.zt)||{}),zo=Object.assign({},(ex&&ex.zout)||{});
+      Object.keys(pz).forEach(z=>{if(!(z in np)&&inZone(ex,z)){pz[z]=0;zt[z]=now;zo[z]=now;}});
+      Object.keys(np).forEach(z=>{const had=ex&&inZone(ex,z);if(!had&&!np[z]&&!(ex==null&&z===WZ()))return;if(!had||num(pz[z])!==np[z]){pz[z]=np[z];zt[z]=now;delete zo[z];}});
+      data.porZona=pz;data.zt=zt;data.zout=zo;recompute(data);data.contado=true;
+    }else data=(!ex||qty!==zq(ex,WZ()))?withZQ(data,WZ(),qty):recompute(data);
+    data.actualizado=now;
     const pid=id||uid();
     closeModal();renderSoft();
     writeProduct(pid,data).then(()=>{toast("Guardado "+sku);if(data.foto&&(AI.model||navigator.onLine))aiLearn(pid,data);}).catch(()=>{});
@@ -2123,7 +2231,9 @@ $("#backupInput").addEventListener("change",async e=>{
     if(cur){
       const base=String(p.actualizado||"")>String(cur.actualizado||"")?Object.assign({},p,{foto:p.foto||cur.foto||""}):Object.assign({},cur);
       const pz=Object.assign({},cur.porZona),zt=Object.assign({},cur.zt||{});let ch=base!==cur&&String(p.actualizado||"")>String(cur.actualizado||"");
-      for(const z in p.porZona){const ti=String((p.zt||{})[z]||""),tc=String(zt[z]||"");if(!(z in pz)||ti>tc){if(pz[z]!==p.porZona[z])ch=true;pz[z]=p.porZona[z];zt[z]=ti||tc;}}
+      const zo=Object.assign({},cur.zout||{});
+      for(const z in p.porZona){const ti=String((p.zt||{})[z]||""),tc=String(zt[z]||"");if(!(z in pz)||ti>tc){if(pz[z]!==p.porZona[z]||!!zo[z]!==!!(p.zout||{})[z])ch=true;pz[z]=p.porZona[z];zt[z]=ti||tc;if((p.zout||{})[z])zo[z]=p.zout[z];else delete zo[z];}}
+      base.zout=zo;
       if(ch){base.porZona=pz;base.zt=zt;recompute(base);await writeProduct(id,base).catch(()=>{});nUpd++;}else nSame++;
       continue;
     }

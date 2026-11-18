@@ -63,6 +63,18 @@ INVENTARIO CON FOTO Y POR ZONAS (versión 4)
 - Al combinar celulares, se juntan las cantidades de cada zona (si dos personas contaron
   zonas distintas del mismo producto, se conservan ambas).
 
+BÚSQUEDA MEJORADA Y EDITAR ZONAS (versión 5)
+- La foto se analiza SIN el fondo: la app aísla la pieza (anillo, arete, collar,
+  pulsera…), la recorta y pinta el fondo de gris antes de compararla. Se muestra la
+  miniatura de la pieza aislada.
+- Compara con 4 criterios y muestra cada uno: diseño (reconocimiento), forma
+  (proporción, relleno y huecos: aros, argollas, eslabones), color de la pieza y tono
+  del metal. Si el tono es distinto lo marca en rojo ("otro tono").
+- La primera vez que uses "Inventariar con foto" tras actualizar, la app prepara de
+  nuevo las fotos ya registradas (solo una vez, necesita internet).
+- Editar zonas: abre un producto > "Cantidades por zona". Cambia la zona de una fila
+  para moverlo, ✕ para quitarlo de esa zona, "+ Agregar otra zona" para repartirlo.
+
 ACTUALIZAR LA APP
 - Reemplaza index.html en GitHub. Los datos guardados en los celulares no se borran.
 - No borres los datos de Chrome del celular sin antes guardar un respaldo.
